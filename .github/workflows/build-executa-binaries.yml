@@ -173,7 +173,6 @@ jobs:
       # 3.12.10 is the latest CPython 3.12 release that has an official
       # universal2 macOS installer; later 3.12 releases are source-only.
       PYTHON_VERSION: "3.12.10"
-      PYTHON_BIN: ${{ runner.temp }}/pyinstaller-universal2/bin/python
     steps:
       - uses: actions/checkout@v4
 
@@ -190,8 +189,10 @@ jobs:
           sudo installer -pkg "$RUNNER_TEMP/python-universal2.pkg" -target /
           /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
             -m venv "$RUNNER_TEMP/pyinstaller-universal2"
+          PYTHON_BIN="$RUNNER_TEMP/pyinstaller-universal2/bin/python"
           lipo -archs "$PYTHON_BIN" | grep -qw x86_64
           lipo -archs "$PYTHON_BIN" | grep -qw arm64
+          echo "PYTHON_BIN=$PYTHON_BIN" >> "$GITHUB_ENV"
 
       - name: Install PyInstaller
         run: |
