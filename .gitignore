@@ -1,0 +1,13 @@
+# PyInstaller build output — binaries are built by CI and published to
+# GitHub Release assets, never committed.
+executas/*/dist/
+executas/*/build/
+executas/*/*.spec
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/

@@ -1,0 +1,159 @@
+# ============================================================
+# Build & Release: text-summarizer Executa binaries
+# ============================================================
+# Manually-triggered (workflow_dispatch only — never runs on push/PR).
+# Builds the Python Executa (executas/text-summarizer) into standalone
+# PyInstaller binaries for darwin-arm64, darwin-x86_64, linux-x86_64, and
+# windows-x86_64, packages each as .tar.gz (Unix) / .zip (Windows) with a
+# SHA-256 checksum file, and publishes both to a GitHub Release. Binaries
+# are never committed to the repo — they only ever live as workflow
+# artifacts and Release assets.
+#
+# Runner images (checked against actions/runner-images on 2026-08-14, not
+# guessed): macos-13/macos-14 are deprecated, so this pins the current GA
+# images instead — macos-15 (Apple Silicon / arm64) and macos-15-large
+# (Intel / x86_64) for the two macOS legs, ubuntu-24.04 and windows-2025
+# for Linux/Windows. All four are explicit versioned labels rather than
+# the "*-latest" aliases, so a future GitHub-side default bump can't
+# silently change what this workflow builds on.
+# ============================================================
+
+name: Build Executa Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish under (default: text-summarizer-v<executa.json version>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  EXECUTA_DIR: executas/text-summarizer
+  EXECUTA_NAME: text-summarizer
+  PLUGIN_FILE: text_summarizer_plugin.py
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: resolve
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('${EXECUTA_DIR}/executa.json'))['version'])")
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${EXECUTA_NAME}-v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} tag=${TAG}"
+
+  build:
+    needs: resolve-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15          # Apple Silicon, GA (macos-14 is deprecated)
+            platform: darwin-arm64
+          - os: macos-15-large    # Intel, GA (macos-13 is retired)
+            platform: darwin-x86_64
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+          - os: windows-2025
+            platform: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build binary (Unix)
+        if: runner.os != 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}
+        run: |
+          pyinstaller --onefile --name "${EXECUTA_NAME}" \
+            --clean --noconfirm --strip --noupx \
+            "${PLUGIN_FILE}"
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --name "$env:EXECUTA_NAME" `
+            --clean --noconfirm `
+            "$env:PLUGIN_FILE"
+
+      - name: Ad-hoc codesign (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ${{ env.EXECUTA_DIR }}
+        run: codesign --force --sign - "dist/${EXECUTA_NAME}" || true
+
+      - name: Smoke-test binary (Unix)
+        if: runner.os != 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}
+        run: |
+          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}" | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
+
+      - name: Smoke-test binary (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}
+        shell: pwsh
+        run: |
+          '{"jsonrpc":"2.0","method":"describe","id":1}' | .\dist\text-summarizer.exe | `
+            python -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}/dist
+        run: |
+          ARCHIVE="${EXECUTA_NAME}-${VERSION}-${PLATFORM}.tar.gz"
+          tar czf "$ARCHIVE" "${EXECUTA_NAME}"
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ env.EXECUTA_DIR }}/dist
+        shell: pwsh
+        run: |
+          $Archive = "${env:EXECUTA_NAME}-${env:VERSION}-${env:PLATFORM}.zip"
+          Compress-Archive -Path "${env:EXECUTA_NAME}.exe" -DestinationPath $Archive
+          $Hash = (Get-FileHash -Algorithm SHA256 -Path $Archive).Hash.ToLower()
+          "$Hash  $Archive" | Out-File -Encoding ascii "$Archive.sha256"
+          Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE=$Archive"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXECUTA_NAME }}-${{ env.PLATFORM }}
+          path: |
+            ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}
+            ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          files: |
+            ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}
+            ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}.sha256

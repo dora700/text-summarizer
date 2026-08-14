@@ -2,5 +2,9 @@
   "name": "Text Summarizer",
   "tagline": "Summarize any text in one click",
   "description": "Paste in an article, notes, or any long passage and get a concise AI-generated summary. Summarization runs in a Python Executa that asks the Anna host to sample an LLM via reverse sampling, so the app never holds its own model credentials.",
-  "category": "productivity"
+  "category": "productivity",
+  "_comment_bundled_executas": "Executas that ship inside this app. `anna-app apps publish` publishes each one first, then substitutes its server-minted tool_id into every `bundled:<handle>` reference in manifest.json (in memory — the file on disk is never mutated). The `text-summarizer` handle maps to ./executas/text-summarizer.",
+  "bundled_executas": {
+    "text-summarizer": { "path": "./executas/text-summarizer" }
+  }
 }

@@ -3,7 +3,7 @@
   "permissions": ["tools.invoke", "ui.svg", "llm.complete"],
   "required_executas": [
     {
-      "tool_id": "tool-dev-text-summarizer",
+      "tool_id": "bundled:text-summarizer",
       "min_version": "0.1.0"
     }
   ],
@@ -25,7 +25,7 @@
       }
     ],
     "host_api": {
-      "tools": ["tool-dev-text-summarizer"],
+      "tools": ["required:bundled:text-summarizer"],
       "llm": ["complete"],
       "window": ["set_title", "ready"]
     },
