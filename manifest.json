@@ -1,0 +1,40 @@
+{
+  "schema": 2,
+  "permissions": ["tools.invoke", "ui.svg", "llm.complete"],
+  "required_executas": [
+    {
+      "tool_id": "tool-dev-text-summarizer",
+      "min_version": "0.1.0"
+    }
+  ],
+  "tags": ["text-summarizer", "ai", "productivity"],
+  "system_prompt_addendum": "You are a concise summarization assistant. When the user shares text, call the text-summarizer tool to produce a clear, faithful summary rather than summarizing from memory.",
+  "ui": {
+    "bundle": {
+      "format": "static-spa",
+      "entry": "index.html",
+      "external_origins": []
+    },
+    "views": [
+      {
+        "name": "main",
+        "title": "Text Summarizer",
+        "default": true,
+        "default_size": { "w": 520, "h": 640 },
+        "min_size": { "w": 360, "h": 420 }
+      }
+    ],
+    "host_api": {
+      "tools": ["tool-dev-text-summarizer"],
+      "llm": ["complete"],
+      "window": ["set_title", "ready"]
+    },
+    "csp_overrides": {},
+    "state_merge": "last_writer_wins"
+  },
+  "dev": {
+    "fixtures": ["fixtures/*.jsonl"],
+    "seed_storage": {},
+    "user_id": 1
+  }
+}

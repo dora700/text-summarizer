@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tool-dev-text-summarizer"
+version = "0.1.0"
+description = "Executa for the text-summarizer Anna App"
+requires-python = ">=3.10"
+
+[project.scripts]
+"tool-dev-text-summarizer" = "text_summarizer_plugin:main"
+
+[tool.setuptools]
+py-modules = ["text_summarizer_plugin"]

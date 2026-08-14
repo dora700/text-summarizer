@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Text Summarizer</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script src="./app.js" type="module"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Text Summarizer</h1>
+
+      <label for="input-text">Paste text to summarize</label>
+      <textarea
+        id="input-text"
+        rows="10"
+        placeholder="Paste an article, notes, or any long text here…"
+      ></textarea>
+
+      <div class="controls">
+        <label for="max-words">Max words</label>
+        <input id="max-words" type="number" min="20" max="400" value="80" />
+        <button id="summarize-btn" type="button">Summarize</button>
+      </div>
+
+      <p id="status" class="status"></p>
+
+      <section id="result" class="result" hidden>
+        <h2>Summary</h2>
+        <p id="summary-text"></p>
+        <p id="summary-meta" class="meta"></p>
+      </section>
+    </main>
+  </body>
+</html>

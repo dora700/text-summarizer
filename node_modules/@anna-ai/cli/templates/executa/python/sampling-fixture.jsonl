@@ -1,0 +1,4 @@
+# Sampling fixture for `anna-app executa dev --mock-sampling`.
+# One JSON object per line. Match the first entry whose `ns`+`method`
+# (and optional content substring) matches the reverse-RPC.
+{"ns":"sampling","method":"createMessage","result":{"role":"assistant","content":{"type":"text","text":"(mock) a one-line summary"},"model":"mock-model","stopReason":"endTurn"}}
