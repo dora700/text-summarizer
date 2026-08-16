@@ -19,24 +19,23 @@
 # No Intel-only "-large" runner is used anywhere. GitHub's Intel macOS
 # runners only exist in that paid "-large" tier (no free/standard Intel
 # Mac size at all) and are billed even when the account has unused free
-# Actions minutes. Instead, the darwin-x86_64 leg is produced by building
-# a genuine universal2 (arm64 + x86_64 fat) binary on the standard
-# (free-tier) macos-15 runner via PyInstaller's official
-# `--target-arch universal2` support, using Python.org's universal2 macOS
-# installer. The same binary bytes are then published under both the
-# darwin-arm64 and darwin-x86_64 platform keys.
+# Actions minutes.
 #
-# All four platforms build with `--onedir`, not `--onefile`. The first
-# real install (macOS, tag text-summarizer-v0.1.0) crashed on launch with
-# "Argument 'sig' has incorrect type (expected int, got Signals)" — a
-# known class of bug in PyInstaller's `--onefile` bootloader (the
-# self-extract-and-re-exec launcher forwards signals to the unpacked
-# child process, and that forwarding path mishandles the `signal.Signals`
-# enum on some builds). `--onedir` runs the real interpreter directly and
-# skips that bootloader stage entirely — the archive now contains a
-# `text-summarizer/` folder instead of a single file; see each
-# `binary_artifacts.<platform>.entrypoint` in executa.json for the exact
-# in-archive path to the launcher.
+# linux-x86_64 and windows-x86_64 build with PyInstaller `--onedir`, not
+# `--onefile` — the first real install (macOS) crashed on launch with
+# "Argument 'sig' has incorrect type (expected int, got Signals)", a known
+# class of bug in PyInstaller's `--onefile` bootloader.
+#
+# The macOS leg went further: even after switching to `--onedir`, the
+# SAME crash still happened when the Anna Agent launched the binary —
+# even though the identical binary ran fine when invoked directly outside
+# the Agent. That rules out onefile's self-extracting bootloader as the
+# actual cause. The macOS job now builds with Nuitka instead of
+# PyInstaller (no bootloader stub at all) to isolate whether the bug is
+# in PyInstaller's runtime shim in general, or in the Agent's own process
+# spawning. See the `build-macos-arm64-nuitka` job below for details —
+# it currently covers darwin-arm64 ONLY (Nuitka has no universal2
+# equivalent), darwin-x86_64 still ships the last PyInstaller build.
 # ============================================================
 
 name: Build Executa Binaries
@@ -176,64 +175,66 @@ jobs:
             ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}
             ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}.sha256
 
-  # ── macOS: ONE universal2 binary on the free-tier arm64 runner,
-  #    published under BOTH darwin-arm64 and darwin-x86_64. Avoids the
-  #    Intel-only "macos-*-large" runner entirely (see header comment).
-  build-macos-universal2:
+  # ── macOS: EXPERIMENT — darwin-arm64 ONLY, built with Nuitka instead of
+  #    PyInstaller. Real-world testing showed the Agent-launched PyInstaller
+  #    --onedir binary crashes with the exact same "Argument 'sig' has
+  #    incorrect type (expected int, got Signals)" error as the original
+  #    --onefile build, even though the identical binary runs fine when
+  #    invoked directly (outside the Agent). That rules out onefile's
+  #    self-extracting bootloader as the cause; the next most likely
+  #    culprit is PyInstaller's bootloader stub in general (onedir still
+  #    uses one). Nuitka compiles to a real native binary with no PyInstaller
+  #    bootloader at all, so if THIS still crashes under the Agent, the bug
+  #    is almost certainly in the Agent's own process-spawning code, not in
+  #    how we package the executa.
+  #
+  #    Nuitka has no --target-arch universal2 equivalent (unlike PyInstaller,
+  #    it compiles for whatever arch it runs on — no built-in fat-binary
+  #    support), so this job deliberately does NOT touch darwin-x86_64 this
+  #    round: publishing an arm64-only binary under the x86_64 key would
+  #    actively break Intel Macs, which is worse than leaving x86_64 on the
+  #    last known-good PyInstaller universal2 build. Revisit x86_64 (e.g.
+  #    lipo-merging two separately-compiled Nuitka binaries) once this
+  #    experiment confirms Nuitka actually fixes the Agent-launch crash.
+  build-macos-arm64-nuitka:
     needs: resolve-version
     runs-on: macos-15
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
-      # 3.12.10 is the latest CPython 3.12 release that has an official
-      # universal2 macOS installer; later 3.12 releases are source-only.
-      PYTHON_VERSION: "3.12.10"
     steps:
       - uses: actions/checkout@v4
 
-      # Python.org's macOS installer provides the required universal2 build
-      # build (per PyInstaller's own docs) — needed because PyInstaller
-      # can only produce a universal2 *output* when run under a
-      # universal2 *interpreter*. actions/setup-python's cached builds
-      # are single-arch, so this job deliberately skips that action.
-      - name: Install universal2 Python and create virtual environment
-        run: |
-          curl --fail --location --retry 3 \
-            "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-macos11.pkg" \
-            --output "$RUNNER_TEMP/python-universal2.pkg"
-          sudo installer -pkg "$RUNNER_TEMP/python-universal2.pkg" -target /
-          /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
-            -m venv "$RUNNER_TEMP/pyinstaller-universal2"
-          PYTHON_BIN="$RUNNER_TEMP/pyinstaller-universal2/bin/python"
-          lipo -archs "$PYTHON_BIN" | grep -qw x86_64
-          lipo -archs "$PYTHON_BIN" | grep -qw arm64
-          echo "PYTHON_BIN=$PYTHON_BIN" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Install PyInstaller
-        run: |
-          "${PYTHON_BIN}" -m pip install --upgrade pip pyinstaller
+      - name: Install Nuitka
+        run: pip install nuitka
 
-      - name: Build universal2 binary
+      # --standalone with NO --onefile: a plain directory of the compiled
+      # binary + its bundled deps, no self-extracting wrapper of any kind.
+      - name: Build with Nuitka
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          "${PYTHON_BIN}" -m PyInstaller --onedir --target-arch universal2 \
-            --name "${EXECUTA_NAME}" --clean --noconfirm --strip --noupx \
+          python3 -m nuitka --standalone \
+            --output-filename="${EXECUTA_NAME}" \
+            --output-dir=dist \
+            --remove-output \
+            --assume-yes-for-downloads \
             "${PLUGIN_FILE}"
+          # Nuitka names the output dir after the script
+          # (text_summarizer_plugin.dist/); rename to match the existing
+          # packaging/entrypoint convention used elsewhere in this workflow
+          # and in executa.json ("text-summarizer/text-summarizer").
+          mv "dist/${PLUGIN_FILE%.py}.dist" "dist/${EXECUTA_NAME}"
 
-      # Hard-fail rather than silently ship a single-arch binary mislabeled
-      # as universal — this is the load-bearing check for this whole job.
-      # With --onedir the launcher lives INSIDE the output folder, at
-      # dist/<name>/<name>, not dist/<name> itself.
-      - name: Verify both architectures are present
+      - name: Verify architecture (sanity check, not universal2 this round)
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
           ARCHS=$(lipo -archs "dist/${EXECUTA_NAME}/${EXECUTA_NAME}")
           echo "Architectures: $ARCHS"
-          echo "$ARCHS" | grep -qw x86_64 || { echo "::error::built binary is missing the x86_64 slice — not a real universal2 build"; exit 1; }
-          echo "$ARCHS" | grep -qw arm64  || { echo "::error::built binary is missing the arm64 slice — not a real universal2 build"; exit 1; }
+          echo "$ARCHS" | grep -qw arm64 || { echo "::error::expected an arm64 binary from the macos-15 (Apple Silicon) runner, got: $ARCHS"; exit 1; }
 
-      # --deep re-signs everything inside the onedir bundle (the launcher
-      # plus every nested dylib/so PyInstaller pulled in), not just the
-      # top-level entrypoint.
       - name: Ad-hoc codesign
         working-directory: ${{ env.EXECUTA_DIR }}
         run: codesign --force --deep --sign - "dist/${EXECUTA_NAME}" || true
@@ -244,26 +245,20 @@ jobs:
           echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}/${EXECUTA_NAME}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
-      - name: Package for both darwin platforms
+      - name: Package darwin-arm64
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         run: |
-          # ${EXECUTA_NAME} is the onedir output folder; tar archives it
-          # recursively, entrypoint ends up at "${EXECUTA_NAME}/${EXECUTA_NAME}".
-          for PLATFORM in darwin-arm64 darwin-x86_64; do
-            ARCHIVE="${EXECUTA_NAME}-${VERSION}-${PLATFORM}.tar.gz"
-            tar czf "$ARCHIVE" "${EXECUTA_NAME}"
-            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
-          done
+          ARCHIVE="${EXECUTA_NAME}-${VERSION}-darwin-arm64.tar.gz"
+          tar czf "$ARCHIVE" "${EXECUTA_NAME}"
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.EXECUTA_NAME }}-darwin-universal2
+          name: ${{ env.EXECUTA_NAME }}-darwin-arm64-nuitka
           path: |
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz.sha256
-            ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-x86_64.tar.gz
-            ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-x86_64.tar.gz.sha256
           if-no-files-found: error
 
       - name: Publish to GitHub Release
@@ -273,5 +268,3 @@ jobs:
           files: |
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz.sha256
-            ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-x86_64.tar.gz
-            ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-x86_64.tar.gz.sha256
