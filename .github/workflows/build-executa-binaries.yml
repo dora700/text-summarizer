@@ -24,10 +24,19 @@
 # (free-tier) macos-15 runner via PyInstaller's official
 # `--target-arch universal2` support, using Python.org's universal2 macOS
 # installer. The same binary bytes are then published under both the
-# darwin-arm64 and darwin-x86_64 platform keys. This has not been run in
-# CI yet — the "Verify both architectures are present" step hard-fails
-# the job with a clear error if the universal2 build doesn't actually
-# contain both slices, rather than silently shipping a broken artifact.
+# darwin-arm64 and darwin-x86_64 platform keys.
+#
+# All four platforms build with `--onedir`, not `--onefile`. The first
+# real install (macOS, tag text-summarizer-v0.1.0) crashed on launch with
+# "Argument 'sig' has incorrect type (expected int, got Signals)" — a
+# known class of bug in PyInstaller's `--onefile` bootloader (the
+# self-extract-and-re-exec launcher forwards signals to the unpacked
+# child process, and that forwarding path mishandles the `signal.Signals`
+# enum on some builds). `--onedir` runs the real interpreter directly and
+# skips that bootloader stage entirely — the archive now contains a
+# `text-summarizer/` folder instead of a single file; see each
+# `binary_artifacts.<platform>.entrypoint` in executa.json for the exact
+# in-archive path to the launcher.
 # ============================================================
 
 name: Build Executa Binaries
@@ -97,7 +106,7 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          pyinstaller --onefile --name "${EXECUTA_NAME}" \
+          pyinstaller --onedir --name "${EXECUTA_NAME}" \
             --clean --noconfirm --strip --noupx \
             "${PLUGIN_FILE}"
 
@@ -106,7 +115,7 @@ jobs:
         working-directory: ${{ env.EXECUTA_DIR }}
         shell: pwsh
         run: |
-          pyinstaller --onefile --name "$env:EXECUTA_NAME" `
+          pyinstaller --onedir --name "$env:EXECUTA_NAME" `
             --clean --noconfirm `
             "$env:PLUGIN_FILE"
 
@@ -114,7 +123,7 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}" | \
+          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}/${EXECUTA_NAME}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
       - name: Smoke-test binary (Windows)
@@ -122,13 +131,16 @@ jobs:
         working-directory: ${{ env.EXECUTA_DIR }}
         shell: pwsh
         run: |
-          '{"jsonrpc":"2.0","method":"describe","id":1}' | .\dist\text-summarizer.exe | `
+          '{"jsonrpc":"2.0","method":"describe","id":1}' | .\dist\text-summarizer\text-summarizer.exe | `
             python -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         run: |
+          # ${EXECUTA_NAME} is now the onedir OUTPUT FOLDER (not a single
+          # file) — tar archives it recursively as-is, entrypoint ends up
+          # at "${EXECUTA_NAME}/${EXECUTA_NAME}" inside the archive.
           ARCHIVE="${EXECUTA_NAME}-${VERSION}-${PLATFORM}.tar.gz"
           tar czf "$ARCHIVE" "${EXECUTA_NAME}"
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
@@ -139,8 +151,10 @@ jobs:
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         shell: pwsh
         run: |
+          # ${EXECUTA_NAME} is the onedir output FOLDER now, not
+          # "${EXECUTA_NAME}.exe" — compress the whole folder.
           $Archive = "${env:EXECUTA_NAME}-${env:VERSION}-${env:PLATFORM}.zip"
-          Compress-Archive -Path "${env:EXECUTA_NAME}.exe" -DestinationPath $Archive
+          Compress-Archive -Path "${env:EXECUTA_NAME}" -DestinationPath $Archive
           $Hash = (Get-FileHash -Algorithm SHA256 -Path $Archive).Hash.ToLower()
           "$Hash  $Archive" | Out-File -Encoding ascii "$Archive.sha256"
           Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE=$Archive"
@@ -201,33 +215,40 @@ jobs:
       - name: Build universal2 binary
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          "${PYTHON_BIN}" -m PyInstaller --onefile --target-arch universal2 \
+          "${PYTHON_BIN}" -m PyInstaller --onedir --target-arch universal2 \
             --name "${EXECUTA_NAME}" --clean --noconfirm --strip --noupx \
             "${PLUGIN_FILE}"
 
       # Hard-fail rather than silently ship a single-arch binary mislabeled
       # as universal — this is the load-bearing check for this whole job.
+      # With --onedir the launcher lives INSIDE the output folder, at
+      # dist/<name>/<name>, not dist/<name> itself.
       - name: Verify both architectures are present
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          ARCHS=$(lipo -archs "dist/${EXECUTA_NAME}")
+          ARCHS=$(lipo -archs "dist/${EXECUTA_NAME}/${EXECUTA_NAME}")
           echo "Architectures: $ARCHS"
           echo "$ARCHS" | grep -qw x86_64 || { echo "::error::built binary is missing the x86_64 slice — not a real universal2 build"; exit 1; }
           echo "$ARCHS" | grep -qw arm64  || { echo "::error::built binary is missing the arm64 slice — not a real universal2 build"; exit 1; }
 
+      # --deep re-signs everything inside the onedir bundle (the launcher
+      # plus every nested dylib/so PyInstaller pulled in), not just the
+      # top-level entrypoint.
       - name: Ad-hoc codesign
         working-directory: ${{ env.EXECUTA_DIR }}
-        run: codesign --force --sign - "dist/${EXECUTA_NAME}" || true
+        run: codesign --force --deep --sign - "dist/${EXECUTA_NAME}" || true
 
       - name: Smoke-test binary
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}" | \
+          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}/${EXECUTA_NAME}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
       - name: Package for both darwin platforms
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         run: |
+          # ${EXECUTA_NAME} is the onedir output folder; tar archives it
+          # recursively, entrypoint ends up at "${EXECUTA_NAME}/${EXECUTA_NAME}".
           for PLATFORM in darwin-arm64 darwin-x86_64; do
             ARCHIVE="${EXECUTA_NAME}-${VERSION}-${PLATFORM}.tar.gz"
             tar czf "$ARCHIVE" "${EXECUTA_NAME}"

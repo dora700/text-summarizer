@@ -10,7 +10,7 @@
   "enabled": true,
 
   "distribution": {
-    "active": "local",
+    "active": "binary",
     "profiles": {
       "local": {
         "type": "local",
@@ -18,27 +18,26 @@
       },
       "binary": {
         "type": "binary",
-        "executable_name": "text-summarizer",
         "supports_protocol": true,
-        "binary_urls": {
+        "binary_artifacts": {
           "darwin-arm64": {
-            "url": "https://github.com/<OWNER>/<REPO>/releases/download/text-summarizer-v0.1.0/text-summarizer-0.1.0-darwin-arm64.tar.gz",
-            "entrypoint": "text-summarizer",
+            "path": "dist/text-summarizer-{version}-darwin-arm64.tar.gz",
+            "entrypoint": "text-summarizer/text-summarizer",
             "format": "tar.gz"
           },
           "darwin-x86_64": {
-            "url": "https://github.com/<OWNER>/<REPO>/releases/download/text-summarizer-v0.1.0/text-summarizer-0.1.0-darwin-x86_64.tar.gz",
-            "entrypoint": "text-summarizer",
+            "path": "dist/text-summarizer-{version}-darwin-x86_64.tar.gz",
+            "entrypoint": "text-summarizer/text-summarizer",
             "format": "tar.gz"
           },
           "linux-x86_64": {
-            "url": "https://github.com/<OWNER>/<REPO>/releases/download/text-summarizer-v0.1.0/text-summarizer-0.1.0-linux-x86_64.tar.gz",
-            "entrypoint": "text-summarizer",
+            "path": "dist/text-summarizer-{version}-linux-x86_64.tar.gz",
+            "entrypoint": "text-summarizer/text-summarizer",
             "format": "tar.gz"
           },
           "windows-x86_64": {
-            "url": "https://github.com/<OWNER>/<REPO>/releases/download/text-summarizer-v0.1.0/text-summarizer-0.1.0-windows-x86_64.zip",
-            "entrypoint": "text-summarizer.exe",
+            "path": "dist/text-summarizer-{version}-windows-x86_64.zip",
+            "entrypoint": "text-summarizer/text-summarizer.exe",
             "format": "zip"
           }
         }
@@ -47,5 +46,5 @@
   },
 
   "_comment": "Publish metadata (slug/name/version/executa_type) is read by `anna-app apps publish`; the dev fields (tool_id/type/enabled) are read by `anna-app dev` for LOCAL discovery only — this tool_id never leaves your machine. The platform mints its own tool_id at publish time and substitutes it into every `bundled:text-summarizer` reference in manifest.json / app.js. This dir is the `text-summarizer` handle referenced by app.json#bundled_executas.",
-  "_comment_distribution": "`active` stays 'local' until you've actually run .github/workflows/build-executa-binaries.yml at least once against a real GitHub remote — flipping it to 'binary' before that would point `anna-app apps publish` at URLs that don't exist yet. The <OWNER>/<REPO> placeholders and the v0.1.0 tag/filenames must be replaced with your real GitHub repo path and whatever tag the workflow actually published (see the workflow's `resolve-version` job output) before flipping `active` to 'binary'."
+  "_comment_distribution": "Direct-upload (push) model: `path` is resolved relative to this executa's project root (this directory), with `{version}` substituted from the `version` field above. `anna-app executa upload-binaries` / `anna-app apps publish` read these local dist/ files and push their bytes straight to the platform CDN — no public URL needed. That means the matching archives (built by .github/workflows/build-executa-binaries.yml) must exist at these exact paths on the machine that runs publish/upload-binaries before that command will succeed; download them from the GitHub Release or the workflow's build artifacts first if you're publishing from a different machine than the one that ran CI. The build is PyInstaller `--onedir` (not `--onefile`) — a known --onefile bootloader bug crashed the first real install with a `signal.Signals` type error — so each archive contains a `text-summarizer/` folder, not a bare file; `entrypoint` is the path to the launcher INSIDE that folder."
 }

@@ -1,5 +1,6 @@
 {
   "name": "Text Summarizer",
+  "slug": "text-summarizer",
   "tagline": "Summarize any text in one click",
   "description": "Paste in an article, notes, or any long passage and get a concise AI-generated summary. Summarization runs in a Python Executa that asks the Anna host to sample an LLM via reverse sampling, so the app never holds its own model credentials.",
   "category": "productivity",
