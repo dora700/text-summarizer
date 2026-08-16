@@ -1,6 +1,6 @@
 {
   "slug": "text-summarizer",
-  "name": "Text Summarizer",
+  "name": "text-summarizer",
   "version": "0.1.0",
   "executa_type": "tool",
   "description": "Summarizes a passage of text by asking the host to sample an LLM via reverse-RPC.",
@@ -45,6 +45,6 @@
     }
   },
 
-  "_comment": "Publish metadata (slug/name/version/executa_type) is read by `anna-app apps publish`; the dev fields (tool_id/type/enabled) are read by `anna-app dev` for LOCAL discovery only — this tool_id never leaves your machine. The platform mints its own tool_id at publish time and substitutes it into every `bundled:text-summarizer` reference in manifest.json / app.js. This dir is the `text-summarizer` handle referenced by app.json#bundled_executas.",
+  "_comment": "Publish metadata (slug/name/version/executa_type) is read by `anna-app apps publish`; the dev fields (tool_id/type/enabled) are read by `anna-app dev` for LOCAL discovery only — this tool_id never leaves your machine. The platform mints its own tool_id at publish time and substitutes it into every `bundled:text-summarizer` reference in manifest.json / app.js. This dir is the `text-summarizer` handle referenced by app.json#bundled_executas. `name` is intentionally a plain slug (was 'Text Summarizer' with a space) — it flows through into the local installer's INSTALL.json `name` and `bin_link` filename (~/.anna/executa/bin/<name>), and a space there is a real footgun for anything doing naive path/argv handling downstream. WeFinance's working executas (tool-calderbuild-wefinance-*) both use slug-style names for exactly this reason.",
   "_comment_distribution": "Direct-upload (push) model: `path` is resolved relative to this executa's project root (this directory), with `{version}` substituted from the `version` field above. `anna-app executa upload-binaries` / `anna-app apps publish` read these local dist/ files and push their bytes straight to the platform CDN — no public URL needed. That means the matching archives (built by .github/workflows/build-executa-binaries.yml) must exist at these exact paths on the machine that runs publish/upload-binaries before that command will succeed; download them from the GitHub Release or the workflow's build artifacts first if you're publishing from a different machine than the one that ran CI. darwin-arm64/linux-x86_64/windows-x86_64 all use a flat PyInstaller --onefile layout with an archive-root manifest.json (runtime.binary.entrypoint + permissions) — proven to fix a real Agent-launch crash on macOS (see the workflow's job comments for the full story). darwin-x86_64 is the ONE remaining exception: it's still the original universal2 --onedir build (nested `text-summarizer/text-summarizer` entrypoint, no archive manifest.json) from before this fix was found, because Nuitka/PyInstaller universal2 builds can't easily be re-done as flat --onefile without giving up either universal2 or the free (non-'-large') runner. Treat darwin-x86_64 as unverified/likely-affected by the same crash until it gets its own rebuild."
 }
