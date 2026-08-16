@@ -22,7 +22,7 @@
         "binary_artifacts": {
           "darwin-arm64": {
             "path": "dist/text-summarizer-{version}-darwin-arm64.tar.gz",
-            "entrypoint": "text-summarizer/text-summarizer",
+            "entrypoint": "text-summarizer",
             "format": "tar.gz"
           },
           "darwin-x86_64": {
@@ -46,5 +46,5 @@
   },
 
   "_comment": "Publish metadata (slug/name/version/executa_type) is read by `anna-app apps publish`; the dev fields (tool_id/type/enabled) are read by `anna-app dev` for LOCAL discovery only — this tool_id never leaves your machine. The platform mints its own tool_id at publish time and substitutes it into every `bundled:text-summarizer` reference in manifest.json / app.js. This dir is the `text-summarizer` handle referenced by app.json#bundled_executas.",
-  "_comment_distribution": "Direct-upload (push) model: `path` is resolved relative to this executa's project root (this directory), with `{version}` substituted from the `version` field above. `anna-app executa upload-binaries` / `anna-app apps publish` read these local dist/ files and push their bytes straight to the platform CDN — no public URL needed. That means the matching archives (built by .github/workflows/build-executa-binaries.yml) must exist at these exact paths on the machine that runs publish/upload-binaries before that command will succeed; download them from the GitHub Release or the workflow's build artifacts first if you're publishing from a different machine than the one that ran CI. The build is PyInstaller `--onedir` (not `--onefile`) — a known --onefile bootloader bug crashed the first real install with a `signal.Signals` type error — so each archive contains a `text-summarizer/` folder, not a bare file; `entrypoint` is the path to the launcher INSIDE that folder."
+  "_comment_distribution": "Direct-upload (push) model: `path` is resolved relative to this executa's project root (this directory), with `{version}` substituted from the `version` field above. `anna-app executa upload-binaries` / `anna-app apps publish` read these local dist/ files and push their bytes straight to the platform CDN — no public URL needed. That means the matching archives (built by .github/workflows/build-executa-binaries.yml) must exist at these exact paths on the machine that runs publish/upload-binaries before that command will succeed; download them from the GitHub Release or the workflow's build artifacts first if you're publishing from a different machine than the one that ran CI. darwin-arm64 is back to a flat PyInstaller --onefile layout (bare `text-summarizer` file, no subfolder) with an archive-root manifest.json added — see the workflow's build-macos-arm64 job comment for why. darwin-x86_64/linux-x86_64/windows-x86_64 are still the earlier --onedir builds (nested `text-summarizer/text-summarizer[.exe]` entrypoint) pending confirmation the manifest.json fix actually works."
 }

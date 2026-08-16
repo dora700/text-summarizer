@@ -21,21 +21,24 @@
 # Mac size at all) and are billed even when the account has unused free
 # Actions minutes.
 #
-# linux-x86_64 and windows-x86_64 build with PyInstaller `--onedir`, not
-# `--onefile` — the first real install (macOS) crashed on launch with
-# "Argument 'sig' has incorrect type (expected int, got Signals)", a known
-# class of bug in PyInstaller's `--onefile` bootloader.
+# linux-x86_64 and windows-x86_64 build with PyInstaller `--onedir`
+# (untouched pending the macOS fix below being confirmed).
 #
-# The macOS leg went further: even after switching to `--onedir`, the
-# SAME crash still happened when the Anna Agent launched the binary —
-# even though the identical binary ran fine when invoked directly outside
-# the Agent. That rules out onefile's self-extracting bootloader as the
-# actual cause. The macOS job now builds with Nuitka instead of
-# PyInstaller (no bootloader stub at all) to isolate whether the bug is
-# in PyInstaller's runtime shim in general, or in the Agent's own process
-# spawning. See the `build-macos-arm64-nuitka` job below for details —
-# it currently covers darwin-arm64 ONLY (Nuitka has no universal2
-# equivalent), darwin-x86_64 still ships the last PyInstaller build.
+# darwin-arm64 has been through three real-install debugging rounds:
+#   1. --onefile crashed on Agent launch: "Argument 'sig' has incorrect
+#      type (expected int, got Signals)".
+#   2. --onedir hit the EXACT SAME crash, ruling out onefile's
+#      self-extracting bootloader specifically.
+#   3. Nuitka (zero PyInstaller bootloader code) hit the SAME crash again,
+#      ruling out PyInstaller's bootloader entirely.
+# Comparing against two OTHER executas on the same account that the Agent
+# launches fine (both plain PyInstaller --onefile Mach-O binaries) found
+# one concrete difference: both working installs ship an archive-root
+# `manifest.json` (runtime.binary.entrypoint + permissions) that ours
+# never included. darwin-arm64 is back to a plain --onefile build with
+# that manifest.json added — see the `build-macos-arm64` job. Not yet
+# confirmed working; darwin-x86_64/linux-x86_64/windows-x86_64 stay on
+# their existing --onedir builds until this is verified.
 # ============================================================
 
 name: Build Executa Binaries
@@ -175,32 +178,33 @@ jobs:
             ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}
             ${{ env.EXECUTA_DIR }}/dist/${{ env.ARCHIVE }}.sha256
 
-  # ── macOS: EXPERIMENT — darwin-arm64 ONLY, built with Nuitka instead of
-  #    PyInstaller. Real-world testing showed the Agent-launched PyInstaller
-  #    --onedir binary crashes with the exact same "Argument 'sig' has
-  #    incorrect type (expected int, got Signals)" error as the original
-  #    --onefile build, even though the identical binary runs fine when
-  #    invoked directly (outside the Agent). That rules out onefile's
-  #    self-extracting bootloader as the cause; the next most likely
-  #    culprit is PyInstaller's bootloader stub in general (onedir still
-  #    uses one). Nuitka compiles to a real native binary with no PyInstaller
-  #    bootloader at all, so if THIS still crashes under the Agent, the bug
-  #    is almost certainly in the Agent's own process-spawning code, not in
-  #    how we package the executa.
+  # ── macOS: darwin-arm64 ONLY. The Nuitka experiment (no PyInstaller
+  #    bootloader at all) crashed with the EXACT SAME "Argument 'sig' has
+  #    incorrect type (expected int, got Signals)" error under the Agent,
+  #    which rules out PyInstaller's bootloader entirely as the cause.
   #
-  #    Nuitka has no --target-arch universal2 equivalent (unlike PyInstaller,
-  #    it compiles for whatever arch it runs on — no built-in fat-binary
-  #    support), so this job deliberately does NOT touch darwin-x86_64 this
-  #    round: publishing an arm64-only binary under the x86_64 key would
-  #    actively break Intel Macs, which is worse than leaving x86_64 on the
-  #    last known-good PyInstaller universal2 build. Revisit x86_64 (e.g.
-  #    lipo-merging two separately-compiled Nuitka binaries) once this
-  #    experiment confirms Nuitka actually fixes the Agent-launch crash.
-  build-macos-arm64-nuitka:
+  #    Comparing against two OTHER locally-installed executas from this
+  #    same account that the Agent launches fine (wefinance-recommend,
+  #    wefinance-chat — both plain PyInstaller --onefile Mach-O binaries)
+  #    found one concrete structural difference: both working installs
+  #    have an archive-root `manifest.json` declaring
+  #    `runtime.binary.entrypoint` + `permissions`, which our archives
+  #    never included. This job reverts to a plain PyInstaller --onefile
+  #    build (proven to work for other tools on this Agent) and adds that
+  #    manifest.json, matching the working examples' structure exactly.
+  #
+  #    darwin-x86_64 is intentionally left untouched again — still on the
+  #    last PyInstaller universal2 build — until this is confirmed fixed.
+  build-macos-arm64:
     needs: resolve-version
     runs-on: macos-15
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
+      # This project's already-published tool_id — mirrors the "name" field
+      # convention seen in the two working reference installs' archive-root
+      # manifest.json. Update this if the executa is ever re-published
+      # under a different handle/tool_id.
+      TOOL_ID: tool-dorajlin-text-summarizer-p73hr6wf
     steps:
       - uses: actions/checkout@v4
 
@@ -208,54 +212,49 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Nuitka
-        run: pip install nuitka
+      - name: Install PyInstaller
+        run: pip install pyinstaller
 
-      # --standalone with NO --onefile: a plain directory of the compiled
-      # binary + its bundled deps, no self-extracting wrapper of any kind.
-      - name: Build with Nuitka
+      - name: Build binary
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          python3 -m nuitka --standalone \
-            --output-filename="${EXECUTA_NAME}" \
-            --output-dir=dist \
-            --remove-output \
-            --assume-yes-for-downloads \
+          pyinstaller --onefile --name "${EXECUTA_NAME}" \
+            --clean --noconfirm --strip --noupx \
             "${PLUGIN_FILE}"
-          # Nuitka names the output dir after the script
-          # (text_summarizer_plugin.dist/); rename to match the existing
-          # packaging/entrypoint convention used elsewhere in this workflow
-          # and in executa.json ("text-summarizer/text-summarizer").
-          mv "dist/${PLUGIN_FILE%.py}.dist" "dist/${EXECUTA_NAME}"
-
-      - name: Verify architecture (sanity check, not universal2 this round)
-        working-directory: ${{ env.EXECUTA_DIR }}
-        run: |
-          ARCHS=$(lipo -archs "dist/${EXECUTA_NAME}/${EXECUTA_NAME}")
-          echo "Architectures: $ARCHS"
-          echo "$ARCHS" | grep -qw arm64 || { echo "::error::expected an arm64 binary from the macos-15 (Apple Silicon) runner, got: $ARCHS"; exit 1; }
 
       - name: Ad-hoc codesign
         working-directory: ${{ env.EXECUTA_DIR }}
-        run: codesign --force --deep --sign - "dist/${EXECUTA_NAME}" || true
+        run: codesign --force --sign - "dist/${EXECUTA_NAME}" || true
 
       - name: Smoke-test binary
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}/${EXECUTA_NAME}" | \
+          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
-      - name: Package darwin-arm64
+      - name: Write archive-root manifest.json and package
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         run: |
+          cat > manifest.json <<JSON
+          {
+            "name": "${TOOL_ID}",
+            "version": "${VERSION}",
+            "runtime": {
+              "binary": {
+                "entrypoint": "${EXECUTA_NAME}",
+                "permissions": { "${EXECUTA_NAME}": "0o755" }
+              }
+            }
+          }
+          JSON
           ARCHIVE="${EXECUTA_NAME}-${VERSION}-darwin-arm64.tar.gz"
-          tar czf "$ARCHIVE" "${EXECUTA_NAME}"
+          tar czf "$ARCHIVE" "${EXECUTA_NAME}" manifest.json
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.EXECUTA_NAME }}-darwin-arm64-nuitka
+          name: ${{ env.EXECUTA_NAME }}-darwin-arm64
           path: |
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz
             ${{ env.EXECUTA_DIR }}/dist/${{ env.EXECUTA_NAME }}-${{ env.VERSION }}-darwin-arm64.tar.gz.sha256
