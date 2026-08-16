@@ -21,9 +21,6 @@
 # Mac size at all) and are billed even when the account has unused free
 # Actions minutes.
 #
-# linux-x86_64 and windows-x86_64 build with PyInstaller `--onedir`
-# (untouched pending the macOS fix below being confirmed).
-#
 # darwin-arm64 has been through three real-install debugging rounds:
 #   1. --onefile crashed on Agent launch: "Argument 'sig' has incorrect
 #      type (expected int, got Signals)".
@@ -35,10 +32,15 @@
 # launches fine (both plain PyInstaller --onefile Mach-O binaries) found
 # one concrete difference: both working installs ship an archive-root
 # `manifest.json` (runtime.binary.entrypoint + permissions) that ours
-# never included. darwin-arm64 is back to a plain --onefile build with
-# that manifest.json added — see the `build-macos-arm64` job. Not yet
-# confirmed working; darwin-x86_64/linux-x86_64/windows-x86_64 stay on
-# their existing --onedir builds until this is verified.
+# never included. Confirmed fixed on macOS: real running processes,
+# stdin/stdout still piped to the Agent, idle CPU, no crash.
+#
+# linux-x86_64 and windows-x86_64 now use the SAME proven layout
+# (--onefile + archive-root manifest.json) even though neither has
+# actually been Agent-tested yet — they started out on the exact
+# --onedir-no-manifest layout that was proven broken on macOS, so there
+# was no reason to leave them on a known-bad pattern just because nobody
+# had hit it yet.
 # ============================================================
 
 name: Build Executa Binaries
@@ -79,7 +81,15 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Resolved version=${VERSION} tag=${TAG}"
 
-  # ── Linux + Windows: plain PyInstaller, one native arch per runner ──
+  # ── Linux + Windows: plain PyInstaller --onefile, one native arch per
+  #    runner, PLUS an archive-root manifest.json — matching the pattern
+  #    proven to work on macOS (see build-macos-arm64 below for the full
+  #    story: --onedir alone reproduced the exact same Agent-launch crash
+  #    macOS hit, and the fix was adding this manifest.json, matching two
+  #    other executas on the same account that the Agent launches fine).
+  #    Neither of these two legs has actually been Agent-tested yet, but
+  #    there's no reason to ship the same already-disproven layout here
+  #    just because nobody hit it yet.
   build:
     needs: resolve-version
     strategy:
@@ -94,6 +104,7 @@ jobs:
     env:
       VERSION: ${{ needs.resolve-version.outputs.version }}
       PLATFORM: ${{ matrix.platform }}
+      TOOL_ID: tool-dorajlin-text-summarizer-p73hr6wf
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +119,7 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          pyinstaller --onedir --name "${EXECUTA_NAME}" \
+          pyinstaller --onefile --name "${EXECUTA_NAME}" \
             --clean --noconfirm --strip --noupx \
             "${PLUGIN_FILE}"
 
@@ -117,7 +128,7 @@ jobs:
         working-directory: ${{ env.EXECUTA_DIR }}
         shell: pwsh
         run: |
-          pyinstaller --onedir --name "$env:EXECUTA_NAME" `
+          pyinstaller --onefile --name "$env:EXECUTA_NAME" `
             --clean --noconfirm `
             "$env:PLUGIN_FILE"
 
@@ -125,7 +136,7 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}
         run: |
-          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}/${EXECUTA_NAME}" | \
+          echo '{"jsonrpc":"2.0","method":"describe","id":1}' | "./dist/${EXECUTA_NAME}" | \
             python3 -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
       - name: Smoke-test binary (Windows)
@@ -133,30 +144,51 @@ jobs:
         working-directory: ${{ env.EXECUTA_DIR }}
         shell: pwsh
         run: |
-          '{"jsonrpc":"2.0","method":"describe","id":1}' | .\dist\text-summarizer\text-summarizer.exe | `
+          '{"jsonrpc":"2.0","method":"describe","id":1}' | .\dist\text-summarizer.exe | `
             python -c "import sys,json; d=json.load(sys.stdin); assert d['result']['name']=='tool-dev-text-summarizer'; print('describe OK')"
 
-      - name: Package (Unix)
+      - name: Write archive-root manifest.json and package (Unix)
         if: runner.os != 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         run: |
-          # ${EXECUTA_NAME} is now the onedir OUTPUT FOLDER (not a single
-          # file) — tar archives it recursively as-is, entrypoint ends up
-          # at "${EXECUTA_NAME}/${EXECUTA_NAME}" inside the archive.
+          cat > manifest.json <<JSON
+          {
+            "name": "${TOOL_ID}",
+            "version": "${VERSION}",
+            "runtime": {
+              "binary": {
+                "entrypoint": "${EXECUTA_NAME}",
+                "permissions": { "${EXECUTA_NAME}": "0o755" }
+              }
+            }
+          }
+          JSON
           ARCHIVE="${EXECUTA_NAME}-${VERSION}-${PLATFORM}.tar.gz"
-          tar czf "$ARCHIVE" "${EXECUTA_NAME}"
+          tar czf "$ARCHIVE" "${EXECUTA_NAME}" manifest.json
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
-      - name: Package (Windows)
+      - name: Write archive-root manifest.json and package (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{ env.EXECUTA_DIR }}/dist
         shell: pwsh
         run: |
-          # ${EXECUTA_NAME} is the onedir output FOLDER now, not
-          # "${EXECUTA_NAME}.exe" — compress the whole folder.
+          $EntryName = "${env:EXECUTA_NAME}.exe"
+          $Permissions = @{}
+          $Permissions[$EntryName] = "0o755"
+          $ManifestObj = [ordered]@{
+            name    = $env:TOOL_ID
+            version = $env:VERSION
+            runtime = [ordered]@{
+              binary = [ordered]@{
+                entrypoint  = $EntryName
+                permissions = $Permissions
+              }
+            }
+          }
+          $ManifestObj | ConvertTo-Json -Depth 5 | Set-Content -Path manifest.json -Encoding utf8
           $Archive = "${env:EXECUTA_NAME}-${env:VERSION}-${env:PLATFORM}.zip"
-          Compress-Archive -Path "${env:EXECUTA_NAME}" -DestinationPath $Archive
+          Compress-Archive -Path $EntryName, manifest.json -DestinationPath $Archive
           $Hash = (Get-FileHash -Algorithm SHA256 -Path $Archive).Hash.ToLower()
           "$Hash  $Archive" | Out-File -Encoding ascii "$Archive.sha256"
           Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE=$Archive"
